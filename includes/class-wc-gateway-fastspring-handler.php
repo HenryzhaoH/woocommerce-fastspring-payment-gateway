@@ -61,34 +61,131 @@ class WC_Gateway_FastSpring_Handler
         self::$settings  = get_option('woocommerce_fastspring_settings', array());
     }
 
-    /**
-     * If API credentials provided we can check for order completion on popup close
-     */
-    public function get_order_status($id)
+    private static function fs_api_request($api_url, $method='GET', $data = NULL)
     {
+        $method = strtoupper($method);
         if (empty(self::get_setting('api_username')) || empty(self::get_setting('api_password'))) {
-            $this->log('No API credentials - skipping API order confirm');
+            self::log('No API credentials - skipping API order confirm');
             return 'pending';
         }
 
-        $url = 'https://api.fastspring.com/orders/' . $id;
+        $url = 'https://api.fastspring.com/' . $api_url;
 
-        $context = stream_context_create(array(
-            'http' => array(
-              'user_agent' => 'Mozilla/5.0', // Not important what it is but must be set
-              'header' => "Authorization: Basic " . base64_encode(
-                  self::get_setting('api_username') . ':' . self::get_setting('api_password')
-              ),
-            )));
+        self::log(sprintf('Querying FastSpring api %s %s', $method, $api_url));
 
-        $data = @json_decode(file_get_contents($url, false, $context));
+        $headers = array();
+        $headers['Authorization'] = "Basic " . base64_encode(
+            self::get_setting('api_username') . ':' . self::get_setting('api_password')
+        );
+        if ($method === 'POST'){
+            $headers['Accept'] = "application/json";
+            $headers['Content-Type'] = "application/json";
+        }
+
+        $headers_str = '';
+        foreach ($headers as $key => $value) {
+            $headers_str = $headers_str."$key: $value\r\n";
+        }
+        $headers_str = rtrim($headers_str, "\r\n");
+
+        $opts = array(
+        'http' => array(
+            'user_agent' => 'Mozilla/5.0', // Not important what it is but must be set
+            'header' => $headers_str,
+        ));
+
+        if ($method === 'POST'){
+            assert(!is_null($data), 'fs_api_req POST with NULL data.');
+            $opts['http']['method'] = $method;
+            $opts['http']['content'] = json_encode($data);
+        }
+
+        $context = stream_context_create($opts);
+
+        $retdata = @json_decode(file_get_contents($url, false, $context));
+        return $retdata;
+    }
+
+    public function get_order_info($fs_order_id)
+    {
+        $this->log(sprintf('Querying FastSpring for id %s', $fs_order_id));
+        return $this->fs_api_request('orders/' . $fs_order_id);
+    }
+
+    public function get_order_status_by_info($fs_order_info)
+    {
+        $data = $fs_order_info;
 
         if ($data && $data->completed === true) {
-            $this->log(sprintf('API order %s completion checked', $id));
+            $this->log(sprintf('API order %s completion checked', $fs_order_info));
             return 'completed';
         }
-        $this->log(sprintf('API order %s not found', $id));
+        $this->log(sprintf('API order %s not found', $fs_order_info));
         return 'pending';
+    }
+
+    /**
+     * If API credentials provided we can check for order completion on popup close
+     */
+    public function get_order_status($fs_order_id)
+    {
+        $data = $this->get_order_info($fs_order_id);
+
+        return $this->get_order_status_by_info($data);
+    }
+
+    private function is_processing_fs_order($fs_order_id)
+    {
+        if(empty($fs_order_id)){
+            return false;
+        }
+        $sess_keyid = 'fs_payment_processing_id_'.$fs_order_id;
+        $last_tried_time = WC()->session->get($sess_keyid, 0);
+        if (time() - $last_tried_time < 60){
+            return true;
+        }
+        WC()->session->set($sess_keyid, time());
+        return false;
+    }
+
+
+    public function complete_order_by_fsid($fs_order_id)
+    {
+        $this->log(sprintf('complete_order_by_fsid start. fsid %s', $fs_order_id));
+
+        $fs_order_info = $this->get_order_info($fs_order_id);
+        $wc_order_id = $fs_order_info->tags->store_order_id;
+
+        $this->log(sprintf('Generating receipt for order %s, fsid %s', $wc_order_id, $fs_order_info->id));
+
+        $order = wc_get_order($wc_order_id);
+
+        if($this->is_processing_fs_order($fs_order_id)){
+            return $order;
+        }
+
+        if ($order && $order->get_status() === 'pending') {
+            if (array_key_exists('reference',$fs_order_info)) {
+                $reference = $fs_order_info->reference;
+            } else {
+                $reference = $fs_order_info->id;
+            }
+
+            // Remove cart
+            WC()->cart->empty_cart();
+
+            $order->set_transaction_id($reference);
+            $order->set_billing_country($fs_order_info->address->country);
+            $order->update_meta_data('fs_order_id', $fs_order_info->id);
+
+            if ($fs_order_info && $fs_order_info->completed === true) {
+                $this->log(sprintf('Marking order ID %s as completed', $order->get_id()));
+                $order->payment_complete($reference);
+                $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
+            }
+        }
+
+        return $order;
     }
 
     /**
@@ -104,42 +201,13 @@ class WC_Gateway_FastSpring_Handler
             wp_send_json_error('Access denied');
         }
 
-        $order_id = absint(WC()->session->get('current_order'));
+        $order = $this->complete_order_by_fsid($payload->id);
 
-        $this->log(sprintf('Generating receipt for order %s', $order_id));
-
-        $order = wc_get_order($order_id);
-        $data = ['order_id' => $order->get_id()];
-
-        // Check for double calls
-        $order_status = $order->get_status();
-
-        // Popup closed with payment
-        if ($order && $payload->reference) {
-
-            // Get API order status if available
-            $status = $this->get_order_status($payload->id);
-
-            // Remove cart
-            WC()->cart->empty_cart();
-
-            $order->set_transaction_id($payload->reference);
-            $order->update_meta_data('fs_order_id', $payload->id);
-
-            if ($status === 'completed' && $order->payment_complete($payload->reference)) {
-                $this->log(sprintf('Marking order ID %s as completed', $order->get_id()));
-                $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
-            }
-            // We could have a race condition where FS already called webhook so lets not assume its pending
-            elseif ($order_status != 'completed') {
-                $order->update_status('pending', __('Order pending payment approval.', 'woocommerce'));
-            }
-
-            $data = ["redirect_url" => WC_Gateway_FastSpring_Handler::get_return_url($order), 'order_id' => $order_id];
-
+        if($order) {
+            $data = ["redirect_url" => WC_Gateway_FastSpring_Handler::get_return_url($order), 'order_id' => $order->get_id()];
             wp_send_json($data);
         } else {
-            wp_send_json_error('Order not found - Order ID was' . $order_id);
+            wp_send_json_error('Order not found - Order ID was' . $payload->id);
         }
     }
 
@@ -168,6 +236,31 @@ class WC_Gateway_FastSpring_Handler
         self::log(sprintf('Final filtered receipt URL set to %s', $filtered));
 
         return $filtered;
+    }
+    
+    /**
+     * Process refund.
+     *
+     * @param  string     $fs_order_id FastSpring order id.
+     * @return boolean True or false based on success, or a WP_Error object.
+     */
+
+    public static function do_fs_refund($fs_order_id)
+    {
+        $req_body = array();
+        $req_body['returns'][]=array(
+            "order" => $fs_order_id,
+            "reason" => "OTHER",
+            // "note" => "",
+            "notification" => "ORIGINAL"
+        );
+
+        $retdata = self::fs_api_request('/returns', 'POST', $req_body);
+        if($retdata->returns[0]->completed===true){
+            return true;
+        } else {
+            return false;
+        }
     }
 
     /**
@@ -207,9 +300,17 @@ class WC_Gateway_FastSpring_Handler
      * @param string $id FastSpring transaction ID
      * @return WC_Order WooCommerce order
      */
-    public function find_order_by_fastspring_tag($payload)
+    public function find_order_by_fastspring_tag($payload, $type = 'DEFAULT')
     {
-        $id = @$payload->data->tags->store_order_id;
+        switch($type) {
+            case 'REFUND':
+                $id = @$payload->data->original->tags->store_order_id;
+                break;
+            default:
+                $id = @$payload->data->tags->store_order_id;
+                break;
+        }
+        
         $this->log(sprintf('Order tag found for %s', $id));
 
         if (!isset($id)) {
@@ -237,6 +338,7 @@ class WC_Gateway_FastSpring_Handler
     public function handle_webhook_request($payload)
     {
         try {
+            $this->log(json_encode($payload));
             switch ($payload->type) {
 
                 case 'order.completed':
@@ -267,8 +369,6 @@ class WC_Gateway_FastSpring_Handler
                   $this->log(sprintf('No webhook handler found for %s', $payload->type));
                   break;
                 }
-
-            $this->log(json_encode($payload));
             return wp_send_json_success();
         } catch (Exception $e) {
             return wp_send_json_error($e->getMessage());
@@ -285,11 +385,10 @@ class WC_Gateway_FastSpring_Handler
         $order = $this->find_order_by_fastspring_tag($payload);
 
         // Only mark complete if not already - webhook can hit multiple times
-        if ($order->get_status() !== 'completed' && $order->payment_complete($payload->reference)) {
-            $this->log(sprintf('Marking order ID %s as complete', $order->get_id()));
-            $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
+        if ($order->get_status() !== 'completed') {
+            $order_ = $this->complete_order_by_fsid($payload->data->id);
         } else {
-            $this->log(sprintf('Failed marking order ID %s as complete', $order->get_id()));
+            $this->log(sprintf('Webhook: Order ID %s status %s does not met processing requirements.', $order->get_id(), $order->get_status()));
         }
     }
 
@@ -300,9 +399,22 @@ class WC_Gateway_FastSpring_Handler
      */
     public function handle_webhook_request_order_refunded($payload)
     {
-        $order = $this->find_order_by_fastspring_tag($payload);
-        $this->log(sprintf('Marking order ID %s as refunded', $order->get_id()));
-        $order->update_status('refunded');
+        $order = $this->find_order_by_fastspring_tag($payload, 'REFUND');
+        $order->add_order_note(sprintf(
+            "Order refunded with transaction id %s, returned %s, orig_total %s, currency %s.", 
+            $payload->data->return,
+            $payload->data->totalReturn,
+            $payload->data->original->total,
+            $payload->data->currency,
+        ));
+        if ($payload->data->totalReturn === $payload->data->original->total){
+            $this->log(sprintf('Marking order ID %s as refunded', $order->get_id()));
+            $order->update_status('refunded');
+            $order->add_order_note("Full refund triggered from FastSpring. Status changed to refunded. No further manual processing required.");
+        } else {
+            $order->add_order_note(sprintf('Order ID %s partial refunded, requires manual processing. DO NOT SET ORDER STATUS TO REFUNDED UNLESS FULLLY REFUNDED! Setting to refunded will trigger activation ban.', $order->get_id()));
+            // $order->update_status('on-hold');
+        }
     }
 
     /**

@@ -214,7 +214,7 @@ class WC_Gateway_FastSpring_Builder
 
         // Set another session var that wont get erased - we need that for receipt
         // We sometimes get a race condition
-        WC()->session->set('current_order', $order_id);
+        // WC()->session->set('current_order', $order_id);
 
         $order = wc_get_order($order_id);
 

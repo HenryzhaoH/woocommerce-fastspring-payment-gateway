@@ -28,16 +28,16 @@ class WC_Gateway_FastSpring extends WC_Payment_Gateway
             'refunds',
             // 'tokenization',
             // 'add_payment_method',
-            'subscriptions', // subscription.activated
-            'subscription_cancellation', // FS subscription.canceled
-            'subscription_suspension', // FS subscription.deactivated,
-            'subscription_reactivation', // FS  subscription.activated
-            'subscription_amount_changes', // FS subscription.updated
-            'subscription_date_changes', // FS subscription.updated
+            // 'subscriptions', // subscription.activated
+            // 'subscription_cancellation', // FS subscription.canceled
+            // 'subscription_suspension', // FS subscription.deactivated,
+            // 'subscription_reactivation', // FS  subscription.activated
+            // 'subscription_amount_changes', // FS subscription.updated
+            // 'subscription_date_changes', // FS subscription.updated
             // 'subscription_payment_method_change',
             // 'subscription_payment_method_change_customer',
             // 'subscription_payment_method_change_admin',
-            'multiple_subscriptions',
+            // 'multiple_subscriptions',
             //'pre-orders',
             );
 
@@ -260,6 +260,30 @@ class WC_Gateway_FastSpring extends WC_Payment_Gateway
           'result' => 'success',
           'session' => WC_Gateway_FastSpring_Builder::get_secure_json_payload(),
         );
+    }
+    
+    /**
+     * Process refund.
+     *
+     * If the gateway declares 'refunds' support, this will allow it to refund.
+     * a passed in amount.
+     *
+     * @param  int        $order_id Order ID.
+     * @param  float|null $amount Refund amount.
+     * @param  string     $reason Refund reason.
+     * @return boolean True or false based on success, or a WP_Error object.
+     */
+    public function process_refund( $order_id, $amount = null, $reason = '' ) {
+        $order = wc_get_order($order_id);
+        if ($order->get_total() !== $amount){
+            return new WP_Error( 'wc-fs-err-refund-amount', 'FastSpring only support full refund.' );
+        }
+        if(!$order->meta_exists('fs_order_id')){
+            return new WP_Error( 'wc-fs-err-refund-orderid', 'FastSpring order id not exists.' );
+        }
+        $fs_order_id = $order->get_meta('fs_order_id');
+
+        return WC_Gateway_FastSpring_Handler::do_fs_refund($fs_order_id);
     }
 
     /**
