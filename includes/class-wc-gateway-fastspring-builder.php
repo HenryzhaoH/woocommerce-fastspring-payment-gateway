@@ -43,22 +43,32 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return object
      */
-    public static function get_cart_items()
+    public static function get_order_items($order_id=null)
     {
         $items = array();
 
-        $has_subscription_support = class_exists('WC_Subscriptions_Product');
+        $has_subscription_support = false; // class_exists('WC_Subscriptions_Product');
 
-        foreach (WC()->cart->cart_contents as $cart_item_key => $values) {
+        $order = wc_get_order($order_id);
+
+        if($order){
+            $orig_items = $order->get_items();
+        } else {
+            throw new WP_Error('get_order_items: Invalid Order ID!');
+            // $orig_items = WC()->cart->cart_contents;
+            // var_dump($orig_items);
+        }
+
+        foreach ($orig_items as $cart_item_key => $values) {
             $price = $values['line_subtotal'] / $values['quantity'];
             $fee = 0;
 
-            $product = $values['data'];
+            // $product = $values['data'];
+            $product = $values->get_product();
+
 
             $item = array(
-             
-
-     'product' => $product->get_slug(),
+              'product' => $product->get_slug(),
               'pricing' => [
                 'quantityBehavior' => 'lock',
                 'quantityDefault' =>  $values['quantity']
@@ -192,11 +202,12 @@ class WC_Gateway_FastSpring_Builder
         if ($data) {
             $image = $data[0];
         } elseif ($placeholder) {
-            $image = wc_placeholder_img($size);
+            $image = wc_placeholder_img_src($size);
         } else {
             $image = '';
         }
-        return str_replace(array('https://', 'http://'), '//', $image);
+        return $image;
+        // return str_replace(array('https://', 'http://'), '//', $image);
     }
 
     /**
@@ -204,9 +215,9 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return object
      */
-    public static function get_cart_customer_details()
+    public static function get_cart_customer_details($order_id)
     {
-        $order_id = absint(WC()->session->get('order_awaiting_payment'));
+        // $order_id = absint(WC()->session->get('order_awaiting_payment'));
 
         if (!$order_id) {
             return [];
@@ -238,9 +249,9 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return array
      */
-    public static function get_order_tags()
+    public static function get_order_tags($order_id)
     {
-        return array("store_order_id" => absint(WC()->session->get('order_awaiting_payment')));
+        return array("store_order_id" => absint($order_id));
     }
 
     /**
@@ -248,12 +259,12 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return object
      */
-    public static function get_json_payload()
+    public static function get_json_payload($order_id)
     {
         return array(
-          'tags' => self::get_order_tags(),
-          'contact' => self::get_cart_customer_details(),
-          'items' => self::get_cart_items(),
+          'tags' => self::get_order_tags($order_id),
+          'contact' => self::get_cart_customer_details($order_id),
+          'items' => self::get_order_items($order_id),
         );
     }
 
@@ -262,10 +273,10 @@ class WC_Gateway_FastSpring_Builder
      *
      * @return object
      */
-    public static function get_secure_json_payload()
+    public static function get_secure_json_payload($order_id)
     {
         $aes_key = self::aes_key_generate();
-        $payload = self::get_json_payload();
+        $payload = self::get_json_payload($order_id);
         $encypted = self::encrypt_payload($aes_key, json_encode($payload));
         $key = self::encrypt_key($aes_key);
 

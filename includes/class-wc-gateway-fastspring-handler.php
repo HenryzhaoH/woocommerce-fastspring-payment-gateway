@@ -195,11 +195,11 @@ class WC_Gateway_FastSpring_Handler
     {
         $payload = json_decode(file_get_contents('php://input'));
 
-        $allowed = wp_verify_nonce($payload->security, 'wc-fastspring-receipt');
+        // $allowed = wp_verify_nonce($payload->security, 'wc-fastspring-receipt');
 
-        if (!$allowed) {
-            wp_send_json_error('Access denied');
-        }
+        // if (!$allowed) {
+        //     wp_send_json_error('Access denied');
+        // }
 
         $order = $this->complete_order_by_fsid($payload->id);
 

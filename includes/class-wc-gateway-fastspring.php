@@ -258,7 +258,7 @@ class WC_Gateway_FastSpring extends WC_Payment_Gateway
 
         return array(
           'result' => 'success',
-          'session' => WC_Gateway_FastSpring_Builder::get_secure_json_payload(),
+          'session' => WC_Gateway_FastSpring_Builder::get_secure_json_payload($order_id),
         );
     }
     
