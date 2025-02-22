@@ -148,6 +148,16 @@ class WC_Gateway_FastSpring_Handler
         return false;
     }
 
+    private function done_processing_fs_order($fs_order_id)
+    {
+        if(empty($fs_order_id)){
+            return false;
+        }
+        $sess_keyid = 'fs_payment_processing_id_'.$fs_order_id;
+        WC()->session->set($sess_keyid, 0);
+        return true;
+    }
+
 
     public function complete_order_by_fsid($fs_order_id)
     {
@@ -161,29 +171,48 @@ class WC_Gateway_FastSpring_Handler
         $order = wc_get_order($wc_order_id);
 
         if($this->is_processing_fs_order($fs_order_id)){
+            $this->log(sprintf('Skipping, still processing. order %s, fsid %s', $wc_order_id, $fs_order_info->id));
             return $order;
         }
 
-        if ($order && $order->get_status() === 'pending') {
-            if (array_key_exists('reference',$fs_order_info)) {
-                $reference = $fs_order_info->reference;
-            } else {
-                $reference = $fs_order_info->id;
+        if ($order){
+            $order_status = $order->get_status();
+            $this->log(sprintf('Order status %s, order %s, fsid %s', $order_status, $wc_order_id, $fs_order_info->id));
+            switch ($order_status) {
+                case 'completed':
+                case 'processing':
+                    break;
+
+                case 'cancelled':
+                    $order->update_status('pending');
+                case 'pending':
+                    if (property_exists($fs_order_info,'reference')) {
+                        $reference = $fs_order_info->reference;
+                    } else {
+                        $reference = $fs_order_info->id;
+                    }
+
+                    $order->set_transaction_id($reference);
+                    $order->set_billing_country($fs_order_info->address->country);
+                    $order->update_meta_data('fs_order_id', $fs_order_info->id);
+                    $order->save();
+
+                    if ($fs_order_info && $fs_order_info->completed === true) {
+                        $this->log(sprintf('Marking order ID %s as completed', $order->get_id()));
+                        $order->payment_complete($reference);
+                        $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
+                    }
+                    break;
+                
+                default:
+                    $this->log(sprintf('Order is invalid , order %s, fsid %s', $wc_order_id, $fs_order_info->id));
+                    break;
             }
-
-            // Remove cart
-            WC()->cart->empty_cart();
-
-            $order->set_transaction_id($reference);
-            $order->set_billing_country($fs_order_info->address->country);
-            $order->update_meta_data('fs_order_id', $fs_order_info->id);
-
-            if ($fs_order_info && $fs_order_info->completed === true) {
-                $this->log(sprintf('Marking order ID %s as completed', $order->get_id()));
-                $order->payment_complete($reference);
-                $order->add_order_note(sprintf(__('FastSpring payment approved (ID: %1$s)', 'woocommerce'), $order->get_id()));
-            }
+        } else {
+            $this->log(sprintf('Order not found, order %s, fsid %s', $wc_order_id, $fs_order_info->id));
         }
+
+        $this->done_processing_fs_order($fs_order_id);
 
         return $order;
     }

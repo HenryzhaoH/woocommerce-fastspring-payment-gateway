@@ -2,7 +2,7 @@
 var checkoutForm = jQuery('form.checkout')
 
 function setLoadingDone () {
-  checkoutForm.removeClass('processing').unblock()
+  //checkoutForm.removeClass('processing').unblock()
 }
 
 function setLoadingOn () {

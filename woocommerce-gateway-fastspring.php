@@ -143,7 +143,7 @@ if (!class_exists('WC_FastSpring')):
       public function modify_loading_scripts($tag, $handle)
       {
           if ('fastspring' === $handle) {
-              $debug = defined('SCRIPT_DEBUG') && SCRIPT_DEBUG ? 'true' : 'false';
+              $debug = defined('SCRIPT_DEBUG') && SCRIPT_DEBUG ? true : false;
               return str_replace(' src', ' id="fsc-api" data-storefront="' . $this->get_storefront_path() . '" data-before-requests-callback="fastspringBeforeRequestHandler" data-access-key="' . self::get_setting('access_key') . '" '. ($debug ? 'data-debug="true" data-test="' . (self::get_setting('testmode') ? 'yes' : 'no') . '" data-version="' . WC_FASTSPRING_VERSION .'" data-data-callback="dataCallbackFunction" data-error-callback="errorCallback"' : '') . ' data-popup-closed="fastspringPopupCloseHandler" src', $tag);
           }
           return $tag;
@@ -187,7 +187,7 @@ if (!class_exists('WC_FastSpring')):
 
           load_plugin_textdomain('woocommerce-gateway-fastspring', false, plugin_basename(dirname(__FILE__)) . '/languages');
 
-          add_filter('woocommerce_checkout_fields', array($this, 'override_checkout_fields'), 20, 1);
+          add_filter('woocommerce_checkout_fields', array($this, 'override_checkout_fields'), 20000, 1);
           add_filter('woocommerce_endpoint_order-pay_title', array($this, 'title_order_pending'), 10, 2);
           add_filter('woocommerce_payment_gateways', array($this, 'add_gateways'));
           add_filter('script_loader_tag', array($this, 'modify_loading_scripts'), 20, 2);
